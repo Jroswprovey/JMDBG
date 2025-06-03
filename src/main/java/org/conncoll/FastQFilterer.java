@@ -8,13 +8,13 @@ import htsjdk.samtools.fastq.FastqWriterFactory;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.HashSet;
 import java.util.Set;
 
 public class FastQFilterer {
 
 
     public static void filterFastq(File inputFastqFile, File outputFastqFile, Set<String> readNamesToRemove) throws IOException {
+        System.out.println("Starting" + inputFastqFile );
         FastqWriterFactory fastqWriterFactory = new FastqWriterFactory();
         try (FastqReader fastqReader = new FastqReader(inputFastqFile);
              FastqWriter fastqWriter = fastqWriterFactory.newWriter(outputFastqFile)) {
@@ -32,10 +32,13 @@ public class FastQFilterer {
                     writtenReads++;
                 }
 
-                if (totalReads % 1000000 == 0) {
+                if (totalReads % 1000000 == 0 && !Menu.verbose) {
+                    System.out.println("Processed " + totalReads + " FASTQ records, written " + writtenReads + "...");
+                } else if (Menu.verbose){
                     System.out.println("Processed " + totalReads + " FASTQ records, written " + writtenReads + "...");
                 }
             }
+
             System.out.println("Finished processing FASTQ.");
             System.out.println("Total FASTQ records read: " + totalReads);
             System.out.println("Records written to filtered FASTQ: " + writtenReads);

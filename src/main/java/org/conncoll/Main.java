@@ -16,7 +16,7 @@ public class Main {
         for(int i =0; i < args.length; i++){
 
             //compare it to everything in the Menu list
-            for (int j = 0; j < Menu.commands.size(); j++) {
+            for(int j = 0; j < Menu.commands.size(); j++) {
 
                 //check if a match is found
                 if(args[i].equalsIgnoreCase(Menu.commands.get(j).getName())){
@@ -24,24 +24,33 @@ public class Main {
                      *along to be executed properly
                      */
                     if(Menu.commands.get(j).isConsumer()){
-                        Menu.commands.get(j).execute(args[i++]);
+                        Menu.commands.get(j).execute(args[i+1]);
                     }else {
                         Menu.commands.get(j).execute();
                     }
-
                 }
-
-
             }
-
         }
+
+
+
 
         // Post accepting inputs
         long beginTime = System.nanoTime();
-        FastQFilterer.filterFastq(Menu.inputFile,Menu.outputFile,samUtilities.getMappedReadNames(Menu.samFile));
-        long endTime = System.nanoTime();
+        if (Menu.verbose){
+            System.out.println("Start Time: " + beginTime);
+            System.out.println(Menu.inputFile.getAbsolutePath());
+            System.out.println(Menu.outputFile.getAbsolutePath());
+            System.out.println(Menu.samFile.getAbsolutePath());
+        }
 
-        System.out.println(TimeUnit.NANOSECONDS.toMinutes(beginTime-endTime));
+        FastQFilterer.filterFastq(Menu.inputFile,Menu.outputFile,samUtilities.getMappedReadNames(Menu.samFile));
+
+        long endTime = System.nanoTime();
+        if (Menu.verbose){ System.out.println("End Time: " + endTime); }
+
+
+        System.out.println(TimeUnit.NANOSECONDS.toMinutes(beginTime - endTime));
 
 
     }
