@@ -5,29 +5,29 @@ import htsjdk.samtools.util.CloseableIterator;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.HashSet;
+import java.util.Set;
 
 
 public class samUtilities {
 
-    public static void read(String filePath){
-
-        File samFile = new File("/Volumes/T9/Raw Data/Aligned Sequence Files/PB644_EB816.hifi_reads.sam");
-
-        SamReader sr = SamReaderFactory.makeDefault()
+    public static Set<String> getMappedReadNames(File samFile) throws IOException {
+        Set<String> mappedReadNames = new HashSet<>();
+        try (SamReader samReader = SamReaderFactory.makeDefault()
                 .validationStringency(ValidationStringency.SILENT)
-                .open(samFile);
+                .open(samFile)){
 
-        SAMRecordIterator recordIterator = sr.iterator();
+            for(final SAMRecord samRecord : samReader){
+                //Loops through the records and if they are mapped, add them to the hashset
+                if (!samRecord.getReadUnmappedFlag()){
+                    mappedReadNames.add(samRecord.getReadName());
+                }
+            }
+        }
 
-        System.out.println(getMaxMapQ(recordIterator));
+        System.out.println("Found " + mappedReadNames.size() + " Mapped Reads");
+        return mappedReadNames;
 
-//        while (recordIterator.hasNext()){
-//            SAMRecord record = recordIterator.next();
-//            //makes sure only aligned matches get printed
-//            if(!record.getReadUnmappedFlag()){
-//                System.out.println(record.toString() + " Quality:" + record.getMappingQuality());
-//            }
-//        }
     }
 
 

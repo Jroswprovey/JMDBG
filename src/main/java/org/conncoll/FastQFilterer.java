@@ -13,24 +13,6 @@ import java.util.Set;
 
 public class FastQFilterer {
 
-    public static Set<String> getMappedReadNames(File samFile) throws IOException {
-        Set<String> mappedReadNames = new HashSet<>();
-        try (SamReader samReader = SamReaderFactory.makeDefault()
-                .validationStringency(ValidationStringency.SILENT)
-                .open(samFile)){
-
-            for(final SAMRecord samRecord : samReader){
-                //Loops through the records and if they are mapped, add them to the hashset
-                if (!samRecord.getReadUnmappedFlag()){
-                    mappedReadNames.add(samRecord.getReadName());
-                }
-            }
-        }
-
-        System.out.println("Found " + mappedReadNames.size() + " Mapped Reads");
-        return mappedReadNames;
-
-    }
 
     public static void filterFastq(File inputFastqFile, File outputFastqFile, Set<String> readNamesToRemove) throws IOException {
         FastqWriterFactory fastqWriterFactory = new FastqWriterFactory();

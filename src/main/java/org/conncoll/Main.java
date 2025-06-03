@@ -1,6 +1,6 @@
 package org.conncoll;
 
-
+import java.util.concurrent.TimeUnit;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -24,7 +24,7 @@ public class Main {
                      *along to be executed properly
                      */
                     if(Menu.commands.get(j).isConsumer()){
-                        Menu.commands.get(j).execute(args[i+1]);
+                        Menu.commands.get(j).execute(args[i++]);
                     }else {
                         Menu.commands.get(j).execute();
                     }
@@ -35,6 +35,14 @@ public class Main {
             }
 
         }
+
+        // Post accepting inputs
+        long beginTime = System.nanoTime();
+        FastQFilterer.filterFastq(Menu.inputFile,Menu.outputFile,samUtilities.getMappedReadNames(Menu.samFile));
+        long endTime = System.nanoTime();
+
+        System.out.println(TimeUnit.NANOSECONDS.toMinutes(beginTime-endTime));
+
 
     }
 }
