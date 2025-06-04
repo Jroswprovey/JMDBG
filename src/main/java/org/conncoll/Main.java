@@ -33,8 +33,6 @@ public class Main {
         }
 
 
-
-
         // Post accepting inputs
         long beginTime = System.nanoTime();
         if (Menu.verbose){
@@ -44,13 +42,18 @@ public class Main {
             System.out.println(Menu.samFile.getAbsolutePath());
         }
 
-        FastQFilterer.filterFastq(Menu.inputFile,Menu.outputFile,samUtilities.getMappedReadNames(Menu.samFile));
+        if(Menu.inputFile != null &&
+            Menu.outputFile != null &&
+            Menu.samFile != null){
+            FastQFilterer.filterFastq(Menu.inputFile,Menu.outputFile,samUtilities.getMappedReadNames(Menu.samFile));
+        }
+
 
         long endTime = System.nanoTime();
         if (Menu.verbose){ System.out.println("End Time: " + endTime); }
 
 
-        System.out.println(TimeUnit.NANOSECONDS.toMinutes(beginTime - endTime));
+        System.out.println(TimeUnit.NANOSECONDS.toMinutes(endTime - beginTime));
 
 
     }

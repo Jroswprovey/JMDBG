@@ -12,6 +12,7 @@ import java.util.Set;
 public class samUtilities {
 
     public static Set<String> getMappedReadNames(File samFile) throws IOException {
+        System.out.println("Getting mapped values from sam File");
         Set<String> mappedReadNames = new HashSet<>();
         try (SamReader samReader = SamReaderFactory.makeDefault()
                 .validationStringency(ValidationStringency.SILENT)
@@ -21,6 +22,9 @@ public class samUtilities {
                 //Loops through the records and if they are mapped, add them to the hashset
                 if (!samRecord.getReadUnmappedFlag()){
                     mappedReadNames.add(samRecord.getReadName());
+                    if (Menu.verbose){
+                        System.out.println(samRecord.getReadName());
+                    }
                 }
             }
         }
