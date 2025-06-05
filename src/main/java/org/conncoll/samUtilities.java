@@ -16,13 +16,13 @@ public class samUtilities {
         Set<String> mappedReadNames = new HashSet<>();
         try (SamReader samReader = SamReaderFactory.makeDefault()
                 .validationStringency(ValidationStringency.SILENT)
-                .open(samFile)){
+                .open(samFile)) {
 
-            for(final SAMRecord samRecord : samReader){
+            for (final SAMRecord samRecord : samReader) {
                 //Loops through the records and if they are mapped, add them to the hashset
-                if (!samRecord.getReadUnmappedFlag()){
+                if (!samRecord.getReadUnmappedFlag()) {
                     mappedReadNames.add(samRecord.getReadName());
-                    if (Menu.verbose){
+                    if (Menu.verbose) {
                         System.out.println(samRecord.getReadName());
                     }
                 }
