@@ -30,25 +30,7 @@ public class Menu {
             new Command("Kmer",    "set k-mer length (integer)",  Menu::setKmer),
             new Command("Window",  "set window size for minimizers (integer)", Menu::setWindow),
             new Command("MinInput", "Path to FASTQ input file for minimizer graph", (arg) -> {Menu.minimizerInputFile = new File(arg);}),
-            new Command("MinOutput", "Path to write unitigs FASTA output", (arg) -> {Menu.minimizerOutputFile = new File(arg);}),
-            new Command("RunMinDBG", "Construct minimizer DBG and write FASTA output", () -> {
-                if (Menu.minimizerInputFile == null || Menu.minimizerOutputFile == null) {
-                    System.err.println("ERROR: Must set input/output file first using MinInput and MinOutput.");
-                    return;
-                }
-                MinimizerDBG dbg = new MinimizerDBG(Menu.kmer, Menu.window, Menu.verbose);
-                try {
-                    long t0 = System.nanoTime();
-                    dbg.buildFromFastq(Menu.minimizerInputFile);
-                    dbg.writeUnitigsAsFasta(Menu.minimizerOutputFile);
-                    long t1 = System.nanoTime();
-                    long durationNanos = t1 - t0;
-                    System.out.println("Holy shit it worked and took: " + TimeUnit.NANOSECONDS.toMinutes(durationNanos) + " minutes");
-                    System.out.println("  (" + TimeUnit.NANOSECONDS.toSeconds(durationNanos) + " seconds total)");
-                } catch (IOException e) {
-                    System.err.println("Failed to run minimizer DBG: " + e.getMessage());
-                }
-            })
+            new Command("MinOutput", "Path to write unitigs FASTA output", (arg) -> {Menu.minimizerOutputFile = new File(arg);})
     );
 
     public static void helpList(){
