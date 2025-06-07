@@ -3,7 +3,6 @@ package org.conncoll;
 import java.io.File;
 import java.io.IOException;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 public class Menu {
 
@@ -59,7 +58,7 @@ public class Menu {
     public static void readFastQ(String path){
         FQreader.setFile(new File(path));
         try {
-            FQreader.read();
+            FQreader.readRecord();
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
