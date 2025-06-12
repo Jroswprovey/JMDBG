@@ -1,196 +1,190 @@
 package org.conncoll.MDBG;
 
-import java.io.File;
-import java.io.IOException;
-import java.io.RandomAccessFile;
 import java.util.*;
+
 
 public class MinimizerDeBruijnGraph {
 
     private final int k;
     private final int w;
-    private final Map<Long, List<Edge>> graph;
+    private final Map<String, Set<String>> graph; // The final graph structure
 
-    // The Edge record now stores the destination node as a long
-    public record Edge(long destinationNode, long offset, int length) {}
+    public MinimizerDeBruijnGraph(int k, int w){
 
-    public MinimizerDeBruijnGraph(int k, int w) {
         this.k = k;
         this.w = w;
         this.graph = new HashMap<>();
+
     }
 
-    // This is now an internal record to hold a minimizer and its original position
-    private record MinimizerInfo(long sequence, int position) {}
+    public List<String> getAllKmers(String sequence, int k){
 
-    public void addSequence(String sequence, RandomAccessFile edgeFile) throws IOException {
-        if (sequence.length() < k) return;
+        ArrayList<String> kmers = new ArrayList<>();
 
-        List<MinimizerInfo> minimizers = this.findMinimizers(sequence, k, w);
-        this.buildGraph(minimizers, sequence, edgeFile);
-    }
-
-    private List<MinimizerInfo> findMinimizers(String sequence, int k, int w) {
-        ArrayList<MinimizerInfo> minimizers = new ArrayList<>();
-        List<Long> kmers = new ArrayList<>();
-        List<Long> canonicalKmers = new ArrayList<>();
-
-        // Prime the k-mer list
         for (int i = 0; i <= sequence.length() - k; i++) {
-            long kmerAsLong = KmerEncoder.stringToLong(sequence.substring(i, i + k));
-            kmers.add(kmerAsLong);
-            canonicalKmers.add(KmerEncoder.getCanonical(kmerAsLong, k));
+
+            kmers.add(sequence.substring(i,i + k));
         }
+        return kmers;
+    }
 
-        // Find minimizers
+
+
+    private List<String> findMinimizers(List<String> kmers, int w){
+
+        ArrayList<String> minimizers = new ArrayList<>();
+        String curMin;
+
         for (int i = 0; i <= kmers.size() - w; i++) {
-            long windowMinimizer = -1;
-            int windowMinimizerPosition = -1;
+            curMin = kmers.get(i);
 
-            for (int j = 0; j < w; j++) {
-                long currentCanonical = canonicalKmers.get(i + j);
-                if (windowMinimizer == -1 || currentCanonical < windowMinimizer) {
-                    windowMinimizer = currentCanonical;
-                    windowMinimizerPosition = i + j;
+            for(int j = 0; j < kmers.subList(i,i + w).size(); j++){
+
+                String canonicalWinner = DNAUtils.getLexicographicCanonical(curMin);
+                String canonicalNext = DNAUtils.getLexicographicCanonical(kmers.get(i+j));
+
+                if (canonicalNext.compareTo(canonicalWinner) < 0){
+
+                    curMin = kmers.get(i+j);
+
                 }
             }
-            minimizers.add(new MinimizerInfo(kmers.get(windowMinimizerPosition), windowMinimizerPosition));
+            minimizers.add(curMin);
         }
         return minimizers;
     }
 
-    private void buildGraph(List<MinimizerInfo> minimizers, String originalRead, RandomAccessFile edgeFile) throws IOException {
-        if (minimizers.size() < 2) {
-            return;
-        }
 
-        for (int i = 0; i < minimizers.size() - 1; i++) {
-            MinimizerInfo sourceInfo = minimizers.get(i);
-            MinimizerInfo destInfo = minimizers.get(i + 1);
 
-            long sourceNode = KmerEncoder.getCanonical(sourceInfo.sequence(), k);
-            long destNode = KmerEncoder.getCanonical(destInfo.sequence(), k);
+    private void buildGraph(List<String> minimizers){
 
-            if (sourceNode == destNode) {
+    //Loop through all minimizes and links adjacent pairs
+        for (int i = 0; i < minimizers.size()-1 ; i++) {
+            String curNode = minimizers.get(i);
+            String nextNode = minimizers.get(i+1);
+
+            if (curNode.equals(nextNode)){
                 continue;
             }
 
-            int pos1 = sourceInfo.position();
-            int pos2 = destInfo.position();
 
-            if (pos2 > pos1) { // Ensure they are in the correct order from the read
-                String edgeSequence = originalRead.substring(pos1, pos2 + this.k);
-                long offset = edgeFile.length();
-                edgeFile.write(edgeSequence.getBytes());
-                int length = edgeSequence.length();
+            this.graph.putIfAbsent(curNode, new HashSet<>());
+            this.graph.get(curNode).add(nextNode);
 
-                Edge pointerEdge = new Edge(destNode, offset, length);
-                this.graph.putIfAbsent(sourceNode, new ArrayList<>());
-                this.graph.get(sourceNode).add(pointerEdge);
-            }
         }
     }
 
-    private List<Long> walkPath(long startNode, Set<Long> visitedNodes) {
-        ArrayList<Long> path = new ArrayList<>();
-        Long curNode = startNode;
 
-        while (curNode != null) {
-            if (visitedNodes.contains(curNode)) {
-                break;
-            }
-            visitedNodes.add(curNode);
-            path.add(curNode);
-
-            List<Edge> edges = this.graph.get(curNode);
-            if (edges == null || edges.size() != 1) {
-                curNode = null;
-            } else {
-                curNode = edges.get(0).destinationNode();
-            }
-        }
-        return path;
-    }
-
-    public List<List<Long>> assembleContigs() {
-        List<List<Long>> allContigs = new ArrayList<>();
-        Set<Long> visitedNodes = new HashSet<>();
-
-        for (long potentialStartNode : this.graph.keySet()) {
-            if (visitedNodes.contains(potentialStartNode)) {
-                continue;
-            }
-            List<Long> newPath = walkPath(potentialStartNode, visitedNodes);
-            if (!newPath.isEmpty()) {
-                allContigs.add(newPath);
-            }
-        }
-        return allContigs;
-    }
-
-    public String stitchContig(List<Long> contigNodePath, File edgeFile) throws IOException {
-        if (contigNodePath == null || contigNodePath.size() < 2) {
-            return contigNodePath != null && !contigNodePath.isEmpty() ? KmerEncoder.longToString(contigNodePath.get(0), k) : "";
-        }
-
-        StringBuilder finalSequence = new StringBuilder();
-
-        try (RandomAccessFile reader = new RandomAccessFile(edgeFile, "r")) {
-            for (int i = 0; i < contigNodePath.size() - 1; i++) {
-                long sourceNode = contigNodePath.get(i);
-                long destNode = contigNodePath.get(i + 1);
-
-                List<Edge> edges = this.graph.get(sourceNode);
-                if (edges == null) continue;
-
-                for (Edge edge : edges) {
-                    if (edge.destinationNode() == destNode) {
-                        reader.seek(edge.offset());
-                        byte[] buffer = new byte[edge.length()];
-                        reader.readFully(buffer);
-                        String edgeSequence = new String(buffer);
-
-                        if (finalSequence.length() == 0) {
-                            finalSequence.append(edgeSequence);
-                        } else {
-                            finalSequence.append(edgeSequence.substring(this.k));
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-        return finalSequence.toString();
-    }
 
     public void printGraph() {
+
         System.out.println("\n--- Minimizer de Bruijn Graph (Adjacency List) ---");
         if (this.graph.isEmpty()) {
             System.out.println("Graph is empty.");
             return;
         }
-        for (Map.Entry<Long, List<Edge>> entry : this.graph.entrySet()) {
-            String sourceString = KmerEncoder.longToString(entry.getKey(), k);
-            System.out.println(sourceString + " -> " + entry.getValue());
+            // Loop through each node that has outgoing edges
+        for (Map.Entry<String, Set<String>> entry : this.graph.entrySet()) {
+            String sourceNode = entry.getKey();
+            Set<String> neighbors = entry.getValue();
+
+            // Print the node and its list of neighbors
+            System.out.println(sourceNode + " -> " + neighbors);
         }
         System.out.println("----------------------------------------------------");
     }
 
+
+
     public String generateGraphvizDot() {
+
         StringBuilder dotBuilder = new StringBuilder();
         dotBuilder.append("digraph MDBG {\n");
-        dotBuilder.append("    rankdir=LR;\n");
-        dotBuilder.append("    node [shape=box, style=rounded];\n");
+        dotBuilder.append(" rankdir=LR;\n");
+        dotBuilder.append(" node [shape=box, style=rounded];\n");
 
-        for (Map.Entry<Long, List<Edge>> entry : this.graph.entrySet()) {
-            String sourceNode = KmerEncoder.longToString(entry.getKey(), k);
-            for (Edge edge : entry.getValue()) {
-                String destNode = KmerEncoder.longToString(edge.destinationNode(), k);
-                String label = edge.length() + "bp";
-                dotBuilder.append("    \"" + sourceNode + "\" -> \"" + destNode + "\" [label=\"" + label + "\"];\n");
+        // Loop through every edge in our graph
+
+        for (Map.Entry<String, Set<String>> entry : this.graph.entrySet()) {
+
+            String sourceNode = entry.getKey();
+
+            for (String destNode : entry.getValue()) {
+
+                // Add a line to the DOT string for each edge
+                // e.g., " "GAT" -> "ATC";"
+
+                dotBuilder.append(" \"" + sourceNode + "\" -> \"" + destNode + "\";\n");
             }
         }
+
         dotBuilder.append("}");
         return dotBuilder.toString();
+    }
+
+
+
+    public void addSequence(String sequence) {
+
+        // These calls are for just this one sequence
+        List<String> kmers = this.getAllKmers(sequence, this.k);
+        List<String> minimizers = this.findMinimizers(kmers, this.w);
+        this.buildGraph(minimizers); // buildGraph adds the new edges to the existing graph
+
+    }
+
+
+
+    private List<String> walkPath(String startNode, Set<String> visitedNodes){
+
+        ArrayList<String> path = new ArrayList<>();
+
+        String curNode = startNode;
+
+        while(curNode != null){
+
+            if(visitedNodes.contains(curNode)){
+                break;
+            }else {
+                visitedNodes.add(curNode);
+                path.add(curNode);
+                Set<String> neighbors = this.graph.get(curNode);
+
+                if (neighbors == null || neighbors.size() != 1){
+
+                    curNode = null;
+
+                }else {
+
+                    curNode = neighbors.iterator().next();
+                }
+            }
+        }
+        return path;
+    }
+
+
+
+
+
+    public List<List<String>> assembleContigs() {
+
+        List<List<String>> allContigs = new ArrayList<>();
+        Set<String> visitedNodes = new HashSet<>();
+
+        // We iterate through every node as a potential starting point
+
+        for (String potentialStartNode : this.graph.keySet()) {
+            if (visitedNodes.contains(potentialStartNode)) {
+                continue; // Skip if we've already used this node
+            }
+
+            // If it's a new node, start walking a path
+            List<String> newPath = walkPath(potentialStartNode, visitedNodes);
+            if (!newPath.isEmpty()) {
+                allContigs.add(newPath);
+            }
+        }
+        return allContigs;
     }
 }
