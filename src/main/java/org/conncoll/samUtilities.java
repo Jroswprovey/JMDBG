@@ -22,9 +22,6 @@ public class samUtilities {
                 //Loops through the records and if they are mapped, add them to the hashset
                 if (!samRecord.getReadUnmappedFlag()) {
                     mappedReadNames.add(samRecord.getReadName());
-                    if (Menu.verbose) {
-                        System.out.println(samRecord.getReadName());
-                    }
                 }
             }
         }

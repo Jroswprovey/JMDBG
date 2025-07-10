@@ -13,7 +13,7 @@ import java.io.PrintStream;
 public class FastQFilterer {
 
 
-    public static void filterFastq(File inputFastqFile, File outputFastqFile, Set<String> readNamesToRemove) throws IOException {
+    public static File filterFastq(File inputFastqFile, File outputFastqFile, Set<String> readNamesToRemove) throws IOException {
         System.out.println("Starting" + inputFastqFile );
 
         try (FastqReader fastqReader = new FastqReader(inputFastqFile)) {
@@ -25,7 +25,6 @@ public class FastQFilterer {
             }else {
                 os = new FileOutputStream(outputFastqFile);
             }
-
 
             long totalReads;
             long writtenReads;
@@ -59,7 +58,7 @@ public class FastQFilterer {
             System.out.println("Records written to filtered FASTQ: " + writtenReads);
             System.out.println("Records removed (found in SAM as mapped): " + (totalReads - writtenReads));
 
-
         }
+        return outputFastqFile;
     }
 }

@@ -2,7 +2,6 @@ package org.conncoll;
 
 import htsjdk.samtools.fastq.FastqReader;
 import htsjdk.samtools.fastq.FastqRecord;
-import org.conncoll.MDBG.MinimizerDeBruijnGraph;
 
 import java.io.RandomAccessFile;
 import java.util.concurrent.TimeUnit;
@@ -13,9 +12,6 @@ import java.util.List;
 
 public class Main {
     public static void main(String[] args) throws IOException {
-
-//        File samFile = new File("/Volumes/T9/Raw Data/Aligned Sequence Files/PB644_EB816.hifi_reads.sam");
-//        File bamFile = new File("/Volumes/T9/Raw Data/Bams/PB644_EB816.hifi_reads.bam");
 
         //for the length of the arg array
         for(int i =0; i < args.length; i++){
