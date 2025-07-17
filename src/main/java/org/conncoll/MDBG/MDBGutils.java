@@ -6,7 +6,6 @@ import com.google.common.hash.Funnels;
 import org.jspecify.annotations.Nullable;
 
 import java.io.*;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Queue;
@@ -93,7 +92,7 @@ public class MDBGutils {
                         if(sequence.equals("HALT")){ //Poison pill
                             break;
                         }
-                        //work thread does
+                        // Here is the work each thread will do
                         EncodedSequence encodedSequence = encode(sequence);
                         processKmers(encodedSequence.sequence,encodedSequence.validBaseCount, localBF);
                         //System.out.println("Processed sequence");
@@ -193,16 +192,14 @@ public class MDBGutils {
         List<Long> recordStartOffsets = new ArrayList<>();
         long bytesRead = 0;
 
-        // Use a BufferedReader for efficient line-by-line reading
+
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(inputFile)))) {
             String line;
             while ((line = reader.readLine()) != null) {
                 if (line.startsWith(">")) {
-                    // We found the start of a record. Store the offset.
+
                     recordStartOffsets.add(bytesRead);
                 }
-                // Update our byte counter. Add the length of the line + 1 for the newline character.
-                // Note: This might need adjustment for Windows vs. Unix line endings (\r\n vs \n)
                 bytesRead += line.getBytes().length + 1;
             }
         }
@@ -212,16 +209,12 @@ public class MDBGutils {
         List<Long> recordStartOffsets = new ArrayList<>();
         long bytesRead = 0;
 
-        // Use a BufferedReader for efficient line-by-line reading
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(inputFile)))) {
             String line;
             while ((line = reader.readLine()) != null) {
                 if (line.startsWith("@")) {
-                    // We found the start of a record. Store the offset.
                     recordStartOffsets.add(bytesRead);
                 }
-                // Update our byte counter. Add the length of the line + 1 for the newline character.
-                // Note: This might need adjustment for Windows vs. Unix line endings (\r\n vs \n)
                 bytesRead += line.getBytes().length + 1;
             }
         }
@@ -344,9 +337,7 @@ public class MDBGutils {
         }
     }
 
-    /**
-     * Helper function to get the 2-bit code of a base at a specific position.
-     */
+
     public static byte getBaseAt(byte[] encodedSequence, int basePosition) {
         int byteIndex = basePosition / 4;
         int bitPosition = basePosition % 4;
@@ -375,6 +366,66 @@ public class MDBGutils {
             throw new RuntimeException(e);
         }
     }
+
+
+    public static long reverseComplement(long kmer, int k) {
+        long rc = 0;
+        for (int i = 0; i < k; i++) {
+            // Get the 2 bits for the current base
+            long base = kmer & 3;
+            // Complement the base (A<->T, C<->G is just XOR with 3)
+            // 00(A) ^ 11 = 11(T)
+            // 01(C) ^ 11 = 10(G)
+            base ^= 3;
+            // Shift the reverse complement to make space for the new base
+            rc <<= 2;
+            // Add the new base
+            rc |= base;
+            // Move to the next base in the original k-mer
+            kmer >>= 2;
+        }
+        return rc;
+    }
+
+    public static String reverseComplement(String sequence) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = sequence.length() - 1; i >= 0; i--) {
+            char base = sequence.charAt(i);
+            switch (base) {
+                case 'A': sb.append('T'); break;
+                case 'T': sb.append('A'); break;
+                case 'C': sb.append('G'); break;
+                case 'G': sb.append('C'); break;
+                default:  sb.append(base); break; // Keep non-ACGT characters as they are
+            }
+        }
+        return sb.toString();
+    }
+
+
+    public static long getCanonical(long kmer, int k) {
+        long rc = reverseComplement(kmer, k);
+        return kmer < rc ? kmer : rc;
+    }
+
+    public static String decode(long kmer, int k) {
+        StringBuilder sb = new StringBuilder(k);
+        char[] baseMap = {'A', 'C', 'G', 'T'};
+
+        for (int i = 0; i < k; i++) {
+            // Get the last 2 bits of the k-mer
+            int code = (int) (kmer & 0b11);
+            // Append the corresponding base character
+            sb.append(baseMap[code]);
+            // Shift the k-mer to process the next base
+            kmer >>= 2;
+        }
+
+        // The loop builds the string in reverse order, so we reverse it.
+        return sb.reverse().toString();
+    }
+
+
 
 
 

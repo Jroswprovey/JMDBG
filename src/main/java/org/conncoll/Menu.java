@@ -4,27 +4,24 @@ import com.google.common.base.Preconditions;
 import com.google.common.hash.BloomFilter;
 import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
-import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
-import it.unimi.dsi.fastutil.ints.IntArrayList;
 import org.conncoll.MDBG.Assembly;
+import org.conncoll.MDBG.MDBGutils;
 import org.conncoll.MDBG.MinimizerOccurrence;
 import com.google.code.externalsorting.ExternalSort;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.Comparator;
+import java.util.*;
 
 
 import java.io.*;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Set;
 
 
 import static org.conncoll.MDBG.MDBGutils.*;
 
 public class Menu {
 
+    record Edge(int fromId, int toId, String sequence) {}
     public static File inputFile;
     public static File outputFile;
     public static File samFile;
@@ -67,7 +64,7 @@ public class Menu {
     }
 
     public static void handleOutputFile(String path){
-        outputFile = new File(path+"CONTIGS"+inputFile.getName());
+        outputFile = new File(path+"CONTIGS_"+inputFile.getName());
     }
 
     public static void setSam(String path){
@@ -76,7 +73,7 @@ public class Menu {
 
     public static void setFilteredFastqOut(String path){
 
-        filteredFastqFileOut = new File(path+"FILTERED"+inputFile.getName());
+        filteredFastqFileOut = new File(path+"FILTERED_"+inputFile.getName());
     }
 
     public static void setVerbose(){
@@ -103,169 +100,139 @@ public class Menu {
 
     public static volatile long  totalKmers = 0;
     public static volatile long totalMinimizers = 0;
-    public static double density = .005;
+    public static double density = .2;
 
 
     public static Long2IntOpenHashMap minimizerToId = new Long2IntOpenHashMap();
     public static int nextMinimizerId = 0;
 
+
     public static void build() throws IOException {
-        //checking users inputs
+        // --- SETUP ---
         Preconditions.checkArgument(kmerSize > 0, "Kmer size must be larger than 0");
         Preconditions.checkArgument(inputFile.exists(), "Invalid input file path");
-        Preconditions.checkArgument(samFile.exists(), "Invalid sam file path");
-
-
-
-        //edges are stored in a temporary location on disk to ease pressure on memory
         String unsortedEdgePath = "/Volumes/T9/Raw_Data/JMDBGout/EdgeStoreage/Edges_Unsorted.tmp";
         String sortedEdgePath = "/Volumes/T9/Raw_Data/JMDBGout/EdgeStoreage/Edges_Sorted.tmp";
+        File fastqToProcess;
 
-        Int2IntOpenHashMap inDegrees = new Int2IntOpenHashMap();
-        Int2IntOpenHashMap outDegrees = new Int2IntOpenHashMap();
+        // Re-initialize for each build
+        minimizerToId = new Long2IntOpenHashMap();
+        nextMinimizerId = 0;
 
-        //this is run on a separate thread to not bog down the actual work with prints to console
-        ProgressDisplay progressDisplay = new ProgressDisplay();
-        Thread displayThread = new Thread(progressDisplay);
-        displayThread.start();
+        // ---  STEP 1: PRE-FILTERING (Optional) ---
+        if (samFile != null && samFile.exists()) {
+            System.out.println("Pre-filtering reads using SAM file...");
+            Set<String> matchedReads = samUtilities.getMappedReadNames(samFile);
+            fastqToProcess = FastQFilterer.filterFastq(inputFile, filteredFastqFileOut, matchedReads);
+        } else {
+            System.out.println("SKIPPING SAM PRE-FILTERING: No SAM file provided.");
+            fastqToProcess = inputFile;
+        }
 
-        Set<String> matchedReads = samUtilities.getMappedReadNames(samFile);
-
-
-        //Step 1: Pre filter file with aligner
-        File filteredFastQ = FastQFilterer.filterFastq(inputFile, filteredFastqFileOut,matchedReads);
-
-
-        //Step 2: filter file with bloom filters
-        BloomFilter seenOnce = multiThreadedBF(filteredFastQ, 7, null);
-        BloomFilter seenTwice = multiThreadedBF(filteredFastQ, 7, seenOnce);
-
-        saveBloomFilter(seenTwice, "/Volumes/T9/Raw_Data/JMDBGout/BloomFilters/seenTwice.bf");
-        //BloomFilter seenTwice = readBloomFilter("/Volumes/T9/Raw_Data/JMDBGout/BloomFilters/seenTwice.bf");
-
+        // ---  STEP 2: BLOOM FILTERS (RESTORED and ENABLED) ---
+        System.out.println("Building Bloom filters to find frequent k-mers...");
+        BloomFilter<Long> seenOnce = multiThreadedBF(fastqToProcess, 7, null); // Using 7 threads as an example
+        BloomFilter<Long> seenTwice = multiThreadedBF(fastqToProcess, 7, seenOnce);
+        System.out.println("Bloom filters built.");
 
 
-        //Step 3: select kmers based on a threshold
-
-        try(BufferedReader reader = new BufferedReader(new FileReader(filteredFastQ));
-            BufferedWriter edgeWriter = new BufferedWriter(new FileWriter(unsortedEdgePath))){
+        // ---  STEP 3 (PASS 1): DISCOVER ALL MINIMIZER NODES ---
+        System.out.println("PASS 1: Discovering all minimizer nodes...");
+        long threshold = (long) (density * (double) Long.MAX_VALUE);
+        try (BufferedReader reader = new BufferedReader(new FileReader(fastqToProcess))) {
             String line;
-            long threshold = (long)(density * (double)Long.MAX_VALUE);
-                while (reader.readLine() !=null) {//ignore header
+            while ((line = reader.readLine()) != null) {
+                line = reader.readLine(); // Sequence
+                reader.readLine(); // +
+                reader.readLine(); // Quality
+                if (line == null) break;
 
-                    line = reader.readLine(); // actual sequence only store this
-                    reader.readLine(); // + stuff
-                    reader.readLine(); // quality scores
+                EncodedSequence encoded = encode(line);
+                int validBaseCount = encoded.validBaseCount();
+                if (validBaseCount < kmerSize) continue;
 
-                    List<MinimizerOccurrence> occurrencesInRead = new ArrayList<>(); //resets every sequence so memory footprint stays low
+                byte[] encodedSequence = encoded.sequence();
+                long KMER_MASK = (1L << (kmerSize * 2)) - 1;
+                long currentKmer = 0L;
 
-
-
-                    EncodedSequence encoded = encode(line); //encode the sequence read in from earlier
-                    int validBaseCount = encoded.validBaseCount();
-                    byte[] encodedSequence = encoded.sequence();
-
-
-                    if (validBaseCount < kmerSize) {
-                        continue; // Sequence is shorter than k.
-                    }
-
-                    // A mask to keep our k-mer at 62 bits (31 bases * 2 bits/base).
-                    long KMER_MASK = (1L << (kmerSize * 2)) - 1;
-
-                    // --- Step 1: Manually build the first k-mer ---
-                    long currentKmer = 0L;
-                    for (int j = 0; j < kmerSize; j++) {
-                        currentKmer <<= 2; // Make room for the next base.
-                        byte newBaseCode = getBaseAt(encodedSequence, j); // Get 2-bit code for base i.
-                        currentKmer |= newBaseCode; // Add it to the k-mer.
-                    }
-
-                    if (seenTwice.mightContain(currentKmer)) {
-
-                        Menu.totalKmers++;
-
-                        //hash the current kmer
-                        long h = fnv1a64(currentKmer);
-                        long unsigned = h & Long.MAX_VALUE;// make non-negative
-
-
-                        //if the current kmer falls below the threshold, add
-                        if (unsigned < threshold) {
-                            Menu.totalMinimizers++;
-                            //if the string lookup doesn't contain it
-                                int id = minimizerToId.computeIfAbsent(currentKmer, key -> nextMinimizerId++);
-                                occurrencesInRead.add(new MinimizerOccurrence(id, 0));
-
-
-                        }
-                    }
-
-
-                    // --- Step 2: Slide the window for the rest of the sequence ---
-                    for (int k = kmerSize; k < validBaseCount; k++) {
-                        // a. Shift the k-mer left by 2 bits, discarding the oldest base.
-                        currentKmer <<= 2;
-
-                        // b. Get the 2-bit code for the new base entering the window.
-                        byte newBaseCode = getBaseAt(encodedSequence, k);
-
-                        // c. Add the new base to the right side of the k-mer.
-                        currentKmer |= newBaseCode;
-
-                        // d. Apply the mask to trim the k-mer back to the correct 62-bit length.
+                for (int i = 0; i < validBaseCount; i++) {
+                    currentKmer <<= 2;
+                    currentKmer |= getBaseAt(encodedSequence, i);
+                    if (i >= kmerSize - 1) {
                         currentKmer &= KMER_MASK;
+                        long canonicalKmer = MDBGutils.getCanonical(currentKmer, kmerSize);
 
-                        // Process the new overlapping k-mer
-                        if (seenTwice.mightContain(currentKmer)) {
-                            Menu.totalKmers++;
-
-                            //hash the current kmer
-                            long h = fnv1a64(currentKmer);
-                            long unsigned = h & Long.MAX_VALUE;// make non-negative
-
-                            //if the current kmer falls below the threshold, add
-                            if (unsigned < threshold) {
-                                Menu.totalMinimizers++;
-                                //if the string lookup doesn't contain it
-                                    int id = minimizerToId.computeIfAbsent(currentKmer, key -> nextMinimizerId++);
-                                    occurrencesInRead.add(new MinimizerOccurrence(id, k - kmerSize + 1));
-
+                        if (seenTwice.mightContain(canonicalKmer)) {
+                            long h = fnv1a64(canonicalKmer);
+                            if ((h & Long.MAX_VALUE) < threshold) {
+                                minimizerToId.computeIfAbsent(canonicalKmer, key -> nextMinimizerId++);
                             }
                         }
                     }
+                }
+            }
+        }
+        System.out.println("PASS 1 Complete. Found " + minimizerToId.size() + " unique minimizer nodes.");
 
-                    for (int i = 0; i < occurrencesInRead.size() - 1; i++) {
-                        MinimizerOccurrence fromMinimizer = occurrencesInRead.get(i);
-                        MinimizerOccurrence toMinimizer = occurrencesInRead.get(i + 1);
+        // ---  STEP 4 (PASS 2): BUILD EDGES FROM READS ---
+        System.out.println("PASS 2: Building edges from reads...");
+        Set<Edge> uniqueEdges = new HashSet<>();
+        try (BufferedReader reader = new BufferedReader(new FileReader(fastqToProcess))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                line = reader.readLine(); // Sequence
+                reader.readLine(); // + stuff
+                reader.readLine(); // Quality
+                if (line == null) break;
 
-                        outDegrees.addTo(fromMinimizer.id, 1);
-                        inDegrees.addTo(toMinimizer.id, 1);
+                List<MinimizerOccurrence> occurrencesInRead = new ArrayList<>();
+                EncodedSequence encoded = encode(line);
+                int validBaseCount = encoded.validBaseCount();
+                if (validBaseCount < kmerSize) continue;
 
-                        int start = fromMinimizer.pos;
-                        int end = toMinimizer.pos + kmerSize;
-                        if (end > line.length()) {
-                            end = line.length();
+                byte[] encodedSequence = encoded.sequence();
+                long KMER_MASK = (1L << (kmerSize * 2)) - 1;
+                long currentKmer = 0L;
+
+                for (int i = 0; i < validBaseCount; i++) {
+                    currentKmer <<= 2;
+                    currentKmer |= getBaseAt(encodedSequence, i);
+                    if (i >= kmerSize - 1) {
+                        currentKmer &= KMER_MASK;
+                        long canonicalKmer = MDBGutils.getCanonical(currentKmer, kmerSize);
+                        if (minimizerToId.containsKey(canonicalKmer)) {
+                            int id = minimizerToId.get(canonicalKmer);
+                            int pos = i - kmerSize + 1;
+                            occurrencesInRead.add(new MinimizerOccurrence(id, pos));
                         }
-
-                        String sequence = line.substring(start, end);
-                        //write minimizers to disk (may take very long :/ possible multithreading in the future,
-                        //but current design isn't friendly to that)
-                        edgeWriter.write(
-                                fromMinimizer.id + "\t" +
-                                        toMinimizer.id + "\t" +
-                                        sequence + "\n"
-                        );
-
-
                     }
                 }
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
-        System.gc();
 
-        System.out.println("Sorting edges using Java external sort...");
+                for (int i = 0; i < occurrencesInRead.size() - 1; i++) {
+                    MinimizerOccurrence fromMinimizer = occurrencesInRead.get(i);
+                    MinimizerOccurrence toMinimizer = occurrencesInRead.get(i + 1);
+                    if(fromMinimizer.id == toMinimizer.id) continue;
+                    String sequence = line.substring(fromMinimizer.pos, toMinimizer.pos + kmerSize);
+                    uniqueEdges.add(new Edge(fromMinimizer.id, toMinimizer.id, sequence));
+                }
+            }
+        }
+
+        Int2IntOpenHashMap inDegrees = new Int2IntOpenHashMap();
+        Int2IntOpenHashMap outDegrees = new Int2IntOpenHashMap();
+        for (Edge edge : uniqueEdges) {
+            outDegrees.addTo(edge.fromId(), 1);
+            inDegrees.addTo(edge.toId(), 1);
+        }
+        System.out.println("PASS 2 Complete. Generated " + uniqueEdges.size() + " unique edges.");
+
+        // --- SORTING AND ASSEMBLY ---
+        System.out.println("Writing and sorting " + uniqueEdges.size() + " edges...");
+        try (BufferedWriter edgeWriter = new BufferedWriter(new FileWriter(unsortedEdgePath))) {
+            for (Edge edge : uniqueEdges) {
+                edgeWriter.write(edge.fromId() + "\t" + edge.toId() + "\t" + edge.sequence() + "\n");
+            }
+        }
 
         Comparator<String> comparator = (line1, line2) -> {
             String fromId1 = line1.substring(0, line1.indexOf('\t'));
@@ -274,7 +241,6 @@ public class Menu {
         };
 
         try {
-            // This one line performs the entire external sort
             ExternalSort.mergeSortedFiles(
                     ExternalSort.sortInBatch(new File(unsortedEdgePath), comparator),
                     new File(sortedEdgePath),
@@ -287,13 +253,6 @@ public class Menu {
         }
 
         new Assembly().assembleStreaming(sortedEdgePath, outputFile.getAbsolutePath(), kmerSize, inDegrees, outDegrees);
-
-        progressDisplay.isFinished = true;
-        try {
-            displayThread.join();
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        }
     }
 
 
@@ -305,8 +264,5 @@ public class Menu {
             throw new RuntimeException(e);
         }
     }
-
-
-
 
 }

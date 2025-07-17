@@ -1,130 +1,184 @@
 package org.conncoll.MDBG;
 
 import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import it.unimi.dsi.fastutil.longs.LongSet;
+import it.unimi.dsi.fastutil.ints.IntSet;
+import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
+
 import java.io.*;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 public class Assembly {
 
-    // A simple record to hold edge information.
-    // This could also be a private static class inside Assembly.
     record Edge(int toId, String sequence) {}
+    record BubblePath(String sequence, int endNodeId) {}
 
-    /**
-     * Assembles unitigs by streaming from a sorted edge file, using pre-calculated node degrees.
-     * This approach is memory-efficient as it does not load the entire graph into RAM.
-     *
-     * @param sortedEdgesPath The path to the file containing sorted graph edges.
-     * @param outputPath      The path for the output FASTA file of contigs.
-     * @param kmerSize        The k-mer size used during graph construction.
-     * @param inDegrees       A map of node ID to its in-degree.
-     * @param outDegrees      A map of node ID to its out-degree.
-     * @throws IOException If an I/O error occurs.
-     */
+    private static final int MAX_BUBBLE_DEPTH = 20;
+    private static final int MAX_BUBBLE_LENGTH = 1500;
+
     public void assembleStreaming(String sortedEdgesPath, String outputPath, int kmerSize,
                                   Int2IntOpenHashMap inDegrees, Int2IntOpenHashMap outDegrees) throws IOException {
 
-        System.out.println("Assembling unitigs via streaming...");
+        System.out.println("Building in-memory graph...");
+        Map<Integer, List<Edge>> graph = loadGraph(sortedEdgesPath);
+        System.out.println("Graph loaded with " + graph.size() + " nodes that have outgoing edges.");
 
-        // Key: The ID of the LAST node in a path. Value: The sequence of the path so far.
-        Map<Integer, StringBuilder> activePaths = new HashMap<>();
+        LongSet traversedEdges = new LongOpenHashSet();
         List<String> finalUnitigs = new ArrayList<>();
 
-        try (BufferedReader reader = new BufferedReader(new FileReader(sortedEdgesPath))) {
-            String line;
-            int lastFromId = -1;
-            List<Edge> currentBlock = new ArrayList<>(); // Holds all edges for the current fromId
+        System.out.println("Assembling unitigs...");
+        IntSet allNodes = new IntOpenHashSet(inDegrees.keySet());
+        allNodes.addAll(outDegrees.keySet());
 
-            while ((line = reader.readLine()) != null) {
-                String[] parts = line.split("\t");
-                int fromId = Integer.parseInt(parts[0]);
-
-                if (fromId != lastFromId && lastFromId != -1) {
-                    // We've finished reading a block of edges for a node, so process it.
-                    processBlock(lastFromId, currentBlock, activePaths, finalUnitigs, inDegrees, outDegrees, kmerSize);
-                    currentBlock.clear();
+        for (int nodeId : allNodes) {
+            // A unitig starts at a node that is NOT a simple corridor.
+            if (inDegrees.get(nodeId) != 1 || outDegrees.get(nodeId) != 1) {
+                List<Edge> outgoingEdges = graph.get(nodeId);
+                if (outgoingEdges != null) {
+                    for (Edge edge : outgoingEdges) {
+                        walkPath(nodeId, edge, graph, traversedEdges, finalUnitigs, inDegrees, outDegrees, kmerSize);
+                    }
                 }
-
-                currentBlock.add(new Edge(Integer.parseInt(parts[1]), parts[2]));
-                lastFromId = fromId;
-            }
-            // Process the very last block in the file after the loop finishes.
-            if (!currentBlock.isEmpty()) {
-                processBlock(lastFromId, currentBlock, activePaths, finalUnitigs, inDegrees, outDegrees, kmerSize);
             }
         }
 
-        // Any paths remaining in activePaths are also complete unitigs.
-        for (StringBuilder sb : activePaths.values()) {
-            finalUnitigs.add(sb.toString());
-        }
-
-        // Write all finalized unitigs to the output FASTA file.
-        writeFasta(outputPath, finalUnitigs);
+        writeFasta(outputPath, finalUnitigs, kmerSize);
         System.out.println("Assembly complete. Wrote " + finalUnitigs.size() + " unitigs.");
     }
 
-    /**
-     * Processes a block of edges all starting from the same node.
-     */
-    private void processBlock(int fromId, List<Edge> edges, Map<Integer, StringBuilder> activePaths,
-                              List<String> finalUnitigs, Int2IntOpenHashMap inDegrees, Int2IntOpenHashMap outDegrees, int kmerSize) {
+    private long getEdgeId(int from, int to) {
+        return ((long) from << 32) | (to & 0xFFFFFFFFL);
+    }
 
-        // A path that was being extended has now arrived at this node block.
-        // Because this node is complex (a branch or merge point), the incoming path is now complete.
-        StringBuilder incomingPath = activePaths.remove(fromId);
-        if (incomingPath != null) {
-            finalUnitigs.add(incomingPath.toString());
+    private void walkPath(int startNode, Edge firstEdge, Map<Integer, List<Edge>> graph, LongSet traversedEdges,
+                          List<String> finalUnitigs, Int2IntOpenHashMap inDegrees, Int2IntOpenHashMap outDegrees, int kmerSize) {
+
+        long firstEdgeId = getEdgeId(startNode, firstEdge.toId);
+        if (traversedEdges.contains(firstEdgeId)) {
+            return;
         }
 
-        // Now, check if this node is the START of new unitigs.
-        // This happens if it's a "head" node (not a simple 1-in, 1-out connector).
-        // The simplest definition of a head is a node that doesn't have a simple "in" path.
-        if (inDegrees.get(fromId) != 1) {
-            // Start a new unitig for each outgoing edge.
-            for (Edge edge : edges) {
-                extendPath(new StringBuilder(edge.sequence), edge, activePaths, finalUnitigs, inDegrees, outDegrees, kmerSize);
+        StringBuilder currentSequence = new StringBuilder(firstEdge.sequence);
+        traversedEdges.add(firstEdgeId);
+
+        int currentNodeId = firstEdge.toId;
+
+        while (inDegrees.get(currentNodeId) == 1 && outDegrees.get(currentNodeId) == 1) {
+            List<Edge> nextEdges = graph.get(currentNodeId);
+            if (nextEdges == null || nextEdges.isEmpty()) break;
+
+            Edge nextEdge = nextEdges.get(0);
+            long nextEdgeId = getEdgeId(currentNodeId, nextEdge.toId);
+
+            if (traversedEdges.contains(nextEdgeId)) {
+                break;
+            }
+
+            // The sequence on the edge is the string connecting two minimizers.
+            // We need to append the part of this string that comes after the overlapping k-mer.
+            currentSequence.append(nextEdge.sequence.substring(kmerSize));
+
+            traversedEdges.add(nextEdgeId);
+            currentNodeId = nextEdge.toId;
+        }
+
+        // Bubble popping logic can be added back here later if needed.
+
+        if (currentSequence.length() >= kmerSize) {
+            finalUnitigs.add(currentSequence.toString());
+        }
+    }
+
+    private BubblePath resolveBubble(int startNodeId, Map<Integer, List<Edge>> graph, LongSet traversedEdges,
+                                     Int2IntOpenHashMap inDegrees, Int2IntOpenHashMap outDegrees, int kmerSize) {
+
+        List<Edge> branches = graph.get(startNodeId);
+        if (branches == null || branches.size() < 2) return null;
+
+        List<BubblePath> resolvedPaths = new ArrayList<>();
+        int consensusEndNode = -1;
+
+        for (Edge branchEdge : branches) {
+            long branchEdgeId = getEdgeId(startNodeId, branchEdge.toId);
+            if (traversedEdges.contains(branchEdgeId)) continue;
+
+            StringBuilder pathSequence = new StringBuilder(branchEdge.sequence);
+            int pathCurrentNodeId = branchEdge.toId;
+            boolean pathIsValid = true;
+
+            for (int depth = 0; depth < MAX_BUBBLE_DEPTH; depth++) {
+                if (pathSequence.length() > MAX_BUBBLE_LENGTH) {
+                    pathIsValid = false;
+                    break;
+                }
+                if (inDegrees.get(pathCurrentNodeId) > 1) break;
+                if (outDegrees.get(pathCurrentNodeId) != 1) {
+                    pathIsValid = false;
+                    break;
+                }
+
+                List<Edge> nextEdges = graph.get(pathCurrentNodeId);
+                if (nextEdges == null || nextEdges.isEmpty()) {
+                    pathIsValid = false;
+                    break;
+                }
+                Edge nextEdge = nextEdges.get(0);
+
+                if (traversedEdges.contains(getEdgeId(pathCurrentNodeId, nextEdge.toId()))) {
+                    pathIsValid = false;
+                    break;
+                }
+                pathSequence.append(nextEdge.sequence.substring(kmerSize));
+                pathCurrentNodeId = nextEdge.toId;
+            }
+            if (pathIsValid) {
+                if (consensusEndNode == -1) consensusEndNode = pathCurrentNodeId;
+                else if (consensusEndNode != pathCurrentNodeId) return null;
+
+                resolvedPaths.add(new BubblePath(pathSequence.toString(), pathCurrentNodeId));
+            } else {
+                return null;
             }
         }
+        if (resolvedPaths.size() != branches.size() || resolvedPaths.isEmpty()) return null;
+
+        resolvedPaths.sort(Comparator.comparing(p -> p.sequence));
+        BubblePath bestPath = resolvedPaths.get(0);
+
+        return new BubblePath(bestPath.sequence.substring(kmerSize), bestPath.endNodeId);
     }
 
-    /**
-     * Extends a given path with a new edge and decides if the path is complete or should continue.
-     */
-    private void extendPath(StringBuilder currentSeq, Edge edge, Map<Integer, StringBuilder> activePaths,
-                            List<String> finalUnitigs, Int2IntOpenHashMap inDegrees, Int2IntOpenHashMap outDegrees, int kmerSize) {
-
-        // Append the non-overlapping part of the new edge's sequence.
-        currentSeq.append(edge.sequence.substring(kmerSize));
-        int toId = edge.toId;
-
-        // Decide if the path is finished or should be put back in the active map.
-        if (outDegrees.get(toId) == 1 && inDegrees.get(toId) == 1) {
-            // This is a simple path, so put it back in activePaths to be extended later.
-            activePaths.put(toId, currentSeq);
-        } else {
-            // This path hits a branch or a dead end, so it's a final unitig.
-            finalUnitigs.add(currentSeq.toString());
+    private Map<Integer, List<Edge>> loadGraph(String sortedEdgesPath) throws IOException {
+        Map<Integer, List<Edge>> graph = new HashMap<>();
+        try (BufferedReader reader = new BufferedReader(new FileReader(sortedEdgesPath))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String[] parts = line.split("\t");
+                int fromId = Integer.parseInt(parts[0]);
+                int toId = Integer.parseInt(parts[1]);
+                String sequence = parts[2];
+                graph.computeIfAbsent(fromId, k -> new ArrayList<>()).add(new Edge(toId, sequence));
+            }
         }
+        return graph;
     }
 
-    /**
-     * Writes a list of sequences to a FASTA formatted file.
-     */
-    private void writeFasta(String outputPath, List<String> unitigs) throws IOException {
+    private void writeFasta(String outputPath, List<String> unitigs, int kmerSize) throws IOException {
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(outputPath))) {
-            for (int i = 0; i < unitigs.size(); i++) {
-                String sequence = unitigs.get(i);
-                writer.write(">unitig_" + i + " length_" + sequence.length() + "\n");
-
-                // Wrap lines for FASTA format (e.g., every 80 characters)
+            int writtenCount = 0;
+            for (String sequence : unitigs) {
+                if (sequence.length() < kmerSize) continue;
+                writer.write(">unitig_" + writtenCount + " length_" + sequence.length() + "\n");
                 for (int j = 0; j < sequence.length(); j += 80) {
                     writer.write(sequence.substring(j, Math.min(j + 80, sequence.length())));
                     writer.newLine();
                 }
+                writtenCount++;
             }
         }
     }
